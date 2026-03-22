@@ -1,10 +1,10 @@
 # ☀ Brightness Bridge
 
-A tiny (~59KB) background service that lets your laptop's **brightness keys** (Fn+☀) control **external monitor brightness** via [ClickMonitorDDC](https://github.com/xanderfrangos/clickmonitorddc).
+A tiny (~59KB) background service that lets your laptop's **brightness keys** (Fn+☀) control **external monitor brightness** via [ClickMonitorDDC](https://clickmonitorddc.com/).
 
 ## The Problem
 
-On laptops with external monitors, the **Fn + Brightness keys** only adjust the built-in display. External monitors use a different protocol (**DDC/CI** over the display cable) that the OS brightness keys don't talk to. [ClickMonitorDDC](https://github.com/xanderfrangos/clickmonitorddc) can control external monitors via DDC/CI, but it can't listen for brightness keys — they're special **HID Consumer Control** events (not regular keyboard keys), so ClickMonitorDDC's built-in hotkey scanner can't detect them.
+On laptops with external monitors, the **Fn + Brightness keys** only adjust the built-in display. External monitors use a different protocol (**DDC/CI** over the display cable) that the OS brightness keys don't talk to. [ClickMonitorDDC](https://clickmonitorddc.com/) can control external monitors via DDC/CI, but it can't listen for brightness keys — they're special **HID Consumer Control** events (not regular keyboard keys), so ClickMonitorDDC's built-in hotkey scanner can't detect them.
 
 **Brightness Bridge** solves this by listening for those low-level HID brightness events and forwarding them to ClickMonitorDDC, making your brightness keys work for external monitors too.
 
