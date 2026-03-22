@@ -1,0 +1,8 @@
+# Python diagnostic tool artifacts
+__pycache__/
+*.pyc
+
+# ClickMonitorDDC (external app, not part of this project)
+ClickMonitorDDC*.exe
+ClickMonitorDDC*.xml
+ClickMonitorDDC*.ini
