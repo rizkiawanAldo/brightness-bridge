@@ -1,0 +1,3 @@
+// resource.rc
+// Application icon
+1 ICON "icon.ico"

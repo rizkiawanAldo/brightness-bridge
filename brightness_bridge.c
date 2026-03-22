@@ -192,7 +192,7 @@ static void tray_add(HWND hwnd)
     g_nid.uID              = TRAY_ICON_ID;
     g_nid.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_nid.uCallbackMessage = WM_TRAYICON;
-    g_nid.hIcon            = LoadIcon(NULL, IDI_APPLICATION);
+    g_nid.hIcon            = LoadIcon(g_hInst, MAKEINTRESOURCE(1));
     lstrcpyW(g_nid.szTip, L"Brightness Bridge");
     Shell_NotifyIconW(NIM_ADD, &g_nid);
 }

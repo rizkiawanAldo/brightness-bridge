@@ -5,8 +5,11 @@ REM You can also use any MinGW gcc on PATH.
 
 set "PATH=C:\tmp\w64devkit\bin;%PATH%"
 
+echo Compiling resources...
+windres resource.rc -o resource.o
+
 echo Building brightness_bridge.exe...
-gcc -O2 -mwindows -o brightness_bridge.exe brightness_bridge.c
+gcc -O2 -mwindows -o brightness_bridge.exe brightness_bridge.c resource.o
 
 if %ERRORLEVEL% EQU 0 (
     echo.
