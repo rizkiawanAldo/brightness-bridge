@@ -3,6 +3,8 @@
  *
  * Captures HID Consumer Control brightness keys (Fn+☀) and calls
  * ClickMonitorDDC directly to adjust external monitor brightness.
+ * Uses relative steps (b +10 / b -10).
+ * Supports key hold (auto-repeat via timer).
  *
  * Place this exe in the SAME directory as ClickMonitorDDC*.exe.
  * Runs silently with a system tray icon. Right-click to exit.
@@ -31,11 +33,16 @@
 /* Brightness step per key press (percentage points) */
 #define BRIGHTNESS_STEP   10
 
+/* Key hold timing (mimicking standard Windows keyboard repeat) */
+#define REPEAT_DELAY_MS   400  /* Delay before repeating starts */
+#define REPEAT_RATE_MS    100  /* Interval between repeats */
+
 /* ── Constants ──────────────────────────────────────────────────────── */
 
 #define WM_TRAYICON      (WM_USER + 1)
 #define IDM_EXIT         1001
 #define TRAY_ICON_ID     1
+#define TIMER_REPEAT_ID  1
 
 /* HID Consumer Control usage page */
 #define HID_USAGE_PAGE_CONSUMER  0x000C
@@ -52,6 +59,11 @@ static HWND             g_hwnd;
 static HINSTANCE        g_hInst;
 static WCHAR            g_clickmonitor_path[MAX_PATH];
 
+/* Key hold state */
+static BOOL             g_key_held = FALSE;
+static int              g_held_direction = 0; /* +1 = up, -1 = down */
+static BOOL             g_is_repeating = FALSE;
+
 /* ── Find ClickMonitorDDC in the same directory as this exe ─────────── */
 
 static BOOL find_clickmonitor(void)
@@ -59,11 +71,9 @@ static BOOL find_clickmonitor(void)
     WCHAR dir[MAX_PATH];
     GetModuleFileNameW(NULL, dir, MAX_PATH);
 
-    /* Strip filename to get directory */
     WCHAR *lastSlash = wcsrchr(dir, L'\\');
     if (lastSlash) *(lastSlash + 1) = L'\0';
 
-    /* Search for ClickMonitorDDC*.exe in the same directory */
     WCHAR searchPath[MAX_PATH];
     _snwprintf(searchPath, MAX_PATH, L"%s%s", dir, CLICKMONITOR_PATTERN);
 
@@ -72,7 +82,6 @@ static BOOL find_clickmonitor(void)
     if (hFind == INVALID_HANDLE_VALUE)
         return FALSE;
 
-    /* Use the first match */
     _snwprintf(g_clickmonitor_path, MAX_PATH, L"%s%s", dir, fd.cFileName);
     FindClose(hFind);
     return TRUE;
@@ -80,10 +89,10 @@ static BOOL find_clickmonitor(void)
 
 /* ── Call ClickMonitorDDC to adjust brightness ──────────────────────── */
 
-static void adjust_brightness(const WCHAR *direction)
+static void call_clickmonitor(const WCHAR *args)
 {
     WCHAR cmdline[512];
-    _snwprintf(cmdline, 512, L"\"%s\" %s", g_clickmonitor_path, direction);
+    _snwprintf(cmdline, 512, L"\"%s\" %s", g_clickmonitor_path, args);
 
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
@@ -91,7 +100,6 @@ static void adjust_brightness(const WCHAR *direction)
     si.cb = sizeof(si);
     ZeroMemory(&pi, sizeof(pi));
 
-    /* CREATE_NO_WINDOW prevents any console flash */
     if (CreateProcessW(
             NULL, cmdline, NULL, NULL, FALSE,
             CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
@@ -99,6 +107,18 @@ static void adjust_brightness(const WCHAR *direction)
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
     }
+}
+
+/* ── Adjust external monitor brightness ────────────────────────────── */
+
+static void adjust_brightness(int direction)
+{
+    WCHAR cmd[32];
+    if (direction > 0)
+        _snwprintf(cmd, 32, L"b +%d", BRIGHTNESS_STEP);
+    else
+        _snwprintf(cmd, 32, L"b -%d", BRIGHTNESS_STEP);
+    call_clickmonitor(cmd);
 }
 
 /* ── Parse HID report for brightness usage codes ───────────────────── */
@@ -126,25 +146,38 @@ static void handle_hid_input(HRAWINPUT hRawInput)
         BYTE *report = reports + i * reportSize;
         WORD usage = 0;
 
-        /*
-         * Extract usage value from HID report.
-         * Your keyboard sends 3-byte reports: [reportID] [usageLo] [usageHi]
-         * e.g. [08 6F 00] = brightness up, [08 70 00] = brightness down
-         */
         if (reportSize >= 3)
             usage = report[1] | ((WORD)report[2] << 8);
         else if (reportSize >= 2)
             usage = report[0] | ((WORD)report[1] << 8);
 
         if (usage == HID_BRIGHTNESS_UP) {
-            WCHAR cmd[32];
-            _snwprintf(cmd, 32, L"b +%d", BRIGHTNESS_STEP);
-            adjust_brightness(cmd);
+            g_key_held = TRUE;
+            g_held_direction = +1;
+            g_is_repeating = FALSE;
+
+            /* Fire immediately */
+            adjust_brightness(+1);
+
+            /* Start initial delay timer */
+            SetTimer(g_hwnd, TIMER_REPEAT_ID, REPEAT_DELAY_MS, NULL);
         }
         else if (usage == HID_BRIGHTNESS_DOWN) {
-            WCHAR cmd[32];
-            _snwprintf(cmd, 32, L"b -%d", BRIGHTNESS_STEP);
-            adjust_brightness(cmd);
+            g_key_held = TRUE;
+            g_held_direction = -1;
+            g_is_repeating = FALSE;
+
+            /* Fire immediately */
+            adjust_brightness(-1);
+
+            /* Start initial delay timer */
+            SetTimer(g_hwnd, TIMER_REPEAT_ID, REPEAT_DELAY_MS, NULL);
+        }
+        else if (usage == 0x0000 && g_key_held) {
+            /* Key released — stop everything */
+            g_key_held = FALSE;
+            g_is_repeating = FALSE;
+            KillTimer(g_hwnd, TIMER_REPEAT_ID);
         }
     }
 }
@@ -177,7 +210,6 @@ static void tray_show_menu(HWND hwnd)
     HMENU hMenu = CreatePopupMenu();
     AppendMenuW(hMenu, MF_STRING, IDM_EXIT, L"Exit Brightness Bridge");
 
-    /* Required for the menu to dismiss properly */
     SetForegroundWindow(hwnd);
     TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, NULL);
     PostMessage(hwnd, WM_NULL, 0, 0);
@@ -196,6 +228,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
         handle_hid_input((HRAWINPUT)lParam);
         return 0;
 
+    case WM_TIMER:
+        if (wParam == TIMER_REPEAT_ID && g_key_held) {
+            if (!g_is_repeating) {
+                /* Transition from delay to repeat rate */
+                g_is_repeating = TRUE;
+                SetTimer(hwnd, TIMER_REPEAT_ID, REPEAT_RATE_MS, NULL);
+            }
+            /* Key is still held — adjust again */
+            adjust_brightness(g_held_direction);
+        }
+        return 0;
+
     case WM_TRAYICON:
         if (lParam == WM_RBUTTONUP || lParam == WM_CONTEXTMENU)
             tray_show_menu(hwnd);
@@ -208,6 +252,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
         return 0;
 
     case WM_DESTROY:
+        KillTimer(hwnd, TIMER_REPEAT_ID);
         tray_remove();
         PostQuitMessage(0);
         return 0;
@@ -223,13 +268,13 @@ static BOOL register_raw_input(HWND hwnd)
     RAWINPUTDEVICE rid;
     rid.usUsagePage = HID_USAGE_PAGE_CONSUMER;
     rid.usUsage     = HID_USAGE_CONSUMER_CTRL;
-    rid.dwFlags     = RIDEV_INPUTSINK; /* receive even when not foreground */
+    rid.dwFlags     = RIDEV_INPUTSINK;
     rid.hwndTarget  = hwnd;
 
     return RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE));
 }
 
-/* ── Entry point (no console window — WinMain) ─────────────────────── */
+/* ── Entry point ───────────────────────────────────────────────────── */
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                    LPSTR lpCmdLine, int nCmdShow)
@@ -262,7 +307,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     WNDCLASSEXW wc    = {0};
     wc.cbSize         = sizeof(WNDCLASSEXW);
     wc.lpfnWndProc    = WndProc;
-    wc.hInstance       = hInstance;
+    wc.hInstance      = hInstance;
     wc.lpszClassName  = L"BrightnessBridgeClass";
     RegisterClassExW(&wc);
 
@@ -275,10 +320,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     if (!g_hwnd) { CloseHandle(hMutex); return 1; }
 
-    /* Register for HID Raw Input */
     if (!register_raw_input(g_hwnd)) { CloseHandle(hMutex); return 1; }
 
-    /* Add system tray icon */
     tray_add(g_hwnd);
 
     /* Message loop */
